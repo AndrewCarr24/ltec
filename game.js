@@ -16,6 +16,16 @@ async function main() {
     const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
     light.intensity = 1;
 
+    // 1. The "Sun" (Directional Light)
+    const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-1, -2, -1), scene);
+    sun.intensity = 2.0;
+    sun.position = new BABYLON.Vector3(20, 40, 20);
+
+    // 2. Enable Shadows
+    const shadowGenerator = new BABYLON.ShadowGenerator(1024, sun);
+    shadowGenerator.useBlurExponentialShadowMap = true;
+    shadowGenerator.blurKernel = 32;
+
     // --- CAMERA (FPS Style) ---
     const camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(0, 0, 0), scene);
     camera.attachControl(canvas, true);
@@ -65,7 +75,7 @@ async function main() {
     let isGrounded = false;
 
     // --- LOAD YOUR MAP ---
-    BABYLON.SceneLoader.ImportMesh("", "./", "test_house2.glb", scene, function (meshes) {
+    BABYLON.SceneLoader.ImportMesh("", "./", "test_house3.glb", scene, function (meshes) {
         meshes.forEach(mesh => {
             // Add physics to each mesh (static bodies)
             if (mesh.name !== "__root__") {
@@ -76,6 +86,10 @@ async function main() {
                     scene
                 );
             }
+
+            // 3. Tell objects to Cast/Receive shadows
+            mesh.receiveShadows = true;
+            shadowGenerator.addShadowCaster(mesh);
         });
     });
 
