@@ -1,40 +1,81 @@
 const canvas = document.getElementById("renderCanvas");
 const engine = new BABYLON.Engine(canvas, true);
 
-const createScene = function () {
+// Main async function to initialize Havok and create scene
+async function main() {
+    // Initialize Havok Physics
+    const havokInstance = await HavokPhysics();
+
     const scene = new BABYLON.Scene(engine);
+
+    // Enable Havok physics (slightly stronger gravity for less floaty feel)
+    const havokPlugin = new BABYLON.HavokPlugin(true, havokInstance);
+    scene.enablePhysics(new BABYLON.Vector3(0, -14, 0), havokPlugin);
 
     // --- LIGHTING ---
     const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
     light.intensity = 1;
 
     // --- CAMERA (FPS Style) ---
-    const camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(-14, 12, 27), scene);
+    const camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(0, 0, 0), scene);
     camera.attachControl(canvas, true);
-    camera.speed = 0.8;
-    camera.inertia = 0.8; // Added a little inertia for smoother movement
+    camera.inertia = 0.8;
+    camera.minZ = 0.1;
 
+    // Remove default camera movement keys (we handle movement via physics)
+    camera.keysUp = [];
+    camera.keysDown = [];
+    camera.keysLeft = [];
+    camera.keysRight = [];
+
+    // --- PLAYER CAPSULE (Physics Body) ---
+    const playerHeight = 2.2; // Taller player
+    const playerRadius = 0.4;
+
+    // Create capsule mesh for player
+    const playerMesh = BABYLON.MeshBuilder.CreateCapsule("player", {
+        height: playerHeight,
+        radius: playerRadius
+    }, scene);
+    playerMesh.position = new BABYLON.Vector3(-14, 13, 27);
+    playerMesh.isVisible = false; // Invisible - we just see through the camera
+
+    // Look into the room
     camera.rotation.y = Math.PI;
 
-    // Fixed key codes (use strings for consistency or the correct deprecated numbers)
-    camera.keysUp = [87];    // W
-    camera.keysDown = [83];  // S
-    camera.keysLeft = [65];  // A
-    camera.keysRight = [68]; // D
+    // Create physics aggregate for player
+    const playerAggregate = new BABYLON.PhysicsAggregate(
+        playerMesh,
+        BABYLON.PhysicsShapeType.CAPSULE,
+        { mass: 70, friction: 0.5, restitution: 0 },
+        scene
+    );
 
-    // --- PHYSICS & COLLISIONS ---
-    scene.collisionsEnabled = true;
-    camera.checkCollisions = true;
-    camera.applyGravity = true; // Let Babylon handle the gravity
-    scene.gravity = new BABYLON.Vector3(0, -0.09, 0); // Standard gravity
+    // Lock rotation to prevent tumbling
+    playerAggregate.body.setMassProperties({
+        inertia: BABYLON.Vector3.ZeroReadOnly
+    });
+    playerAggregate.body.disablePreStep = false;
 
-    // The ellipsoid is the "hitbox" for your camera
-    camera.ellipsoid = new BABYLON.Vector3(1, 1, 1);
+    // --- MOVEMENT SETTINGS ---
+    const walkSpeed = 5;
+    const runSpeed = 10;
+    const jumpForce = 7;
+    let currentSpeed = walkSpeed;
+    let isGrounded = false;
 
     // --- LOAD YOUR MAP ---
     BABYLON.SceneLoader.ImportMesh("", "./", "test_house2.glb", scene, function (meshes) {
         meshes.forEach(mesh => {
-            mesh.checkCollisions = true;
+            // Add physics to each mesh (static bodies)
+            if (mesh.name !== "__root__") {
+                new BABYLON.PhysicsAggregate(
+                    mesh,
+                    BABYLON.PhysicsShapeType.MESH,
+                    { mass: 0, friction: 0.5 }, // mass 0 = static
+                    scene
+                );
+            }
         });
     });
 
@@ -43,43 +84,118 @@ const createScene = function () {
         canvas.requestPointerLock();
     });
 
+    // Mouse look sensitivity
+    const mouseSensitivity = 0.002;
+
+    document.addEventListener("mousemove", (e) => {
+        if (document.pointerLockElement === canvas) {
+            camera.rotation.y += e.movementX * mouseSensitivity;
+            camera.rotation.x += e.movementY * mouseSensitivity;
+            camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+        }
+    });
+
     // --- INPUT HANDLING ---
     const inputMap = {};
-    let canJump = true;
 
     window.addEventListener("keydown", (e) => {
         inputMap[e.code] = true;
 
-        // Jump Fix: Using cameraDirection for the built-in physics
-        if (e.code === "Space" && canJump) {
-            // We apply an upward force to the camera's internal direction
-            camera.cameraDirection.y = .9;
-            canJump = false;
-            // Simple cooldown for jumping
-            setTimeout(() => { canJump = true; }, 900);
-        }
-
+        // Run with Shift
         if (e.key === "Shift") {
-            camera.speed = 1;
+            currentSpeed = runSpeed;
         }
     });
 
     window.addEventListener("keyup", (e) => {
         inputMap[e.code] = false;
-        if (e.key === "Shift") camera.speed = 0.4;
-    });
-
-    // --- GAME LOOP ---
-    scene.onBeforeRenderObservable.add(() => {
-        // Reset position if you fall off the map
-        if (camera.position.y < -10) {
-            camera.position = new BABYLON.Vector3(-14, 12, 27);
+        if (e.key === "Shift") {
+            currentSpeed = walkSpeed;
         }
     });
 
-    return scene;
-};
+    // --- GROUND DETECTION ---
+    function checkGrounded() {
+        const rayStart = playerMesh.position.clone();
+        const rayEnd = rayStart.add(new BABYLON.Vector3(0, -(playerHeight / 2 + 0.1), 0));
 
-const scene = createScene();
-engine.runRenderLoop(() => scene.render());
+        const ray = new BABYLON.Ray(rayStart, BABYLON.Vector3.Down(), playerHeight / 2 + 0.2);
+        const hit = scene.pickWithRay(ray, (mesh) => mesh !== playerMesh);
+
+        return hit && hit.hit && hit.distance < playerHeight / 2 + 0.15;
+    }
+
+    // --- GAME LOOP ---
+    scene.onBeforeRenderObservable.add(() => {
+        // Update camera position to follow player
+        camera.position = playerMesh.position.clone();
+        camera.position.y += playerHeight / 2 + 0.3; // Eye level - higher up
+
+        // Check if grounded
+        isGrounded = checkGrounded();
+
+        // Get current velocity
+        const currentVelocity = playerAggregate.body.getLinearVelocity();
+
+        // Calculate movement direction based on camera rotation
+        const forward = new BABYLON.Vector3(
+            Math.sin(camera.rotation.y),
+            0,
+            Math.cos(camera.rotation.y)
+        );
+        const right = new BABYLON.Vector3(
+            Math.cos(camera.rotation.y),
+            0,
+            -Math.sin(camera.rotation.y)
+        );
+
+        // Calculate desired velocity
+        let moveDirection = BABYLON.Vector3.Zero();
+
+        if (inputMap["KeyW"]) moveDirection.addInPlace(forward);
+        if (inputMap["KeyS"]) moveDirection.subtractInPlace(forward);
+        if (inputMap["KeyA"]) moveDirection.subtractInPlace(right);
+        if (inputMap["KeyD"]) moveDirection.addInPlace(right);
+
+        // Normalize and scale by speed
+        if (moveDirection.length() > 0) {
+            moveDirection.normalize();
+            moveDirection.scaleInPlace(currentSpeed);
+        }
+
+        // Set horizontal velocity, preserve vertical velocity
+        playerAggregate.body.setLinearVelocity(
+            new BABYLON.Vector3(moveDirection.x, currentVelocity.y, moveDirection.z)
+        );
+
+        // Jump
+        if (inputMap["Space"] && isGrounded) {
+            const vel = playerAggregate.body.getLinearVelocity();
+            playerAggregate.body.setLinearVelocity(
+                new BABYLON.Vector3(vel.x, jumpForce, vel.z)
+            );
+            inputMap["Space"] = false; // Prevent continuous jumping
+        }
+
+        // Arrow keys for looking
+        const rotationSpeed = 0.03;
+        if (inputMap["ArrowLeft"]) camera.rotation.y -= rotationSpeed;
+        if (inputMap["ArrowRight"]) camera.rotation.y += rotationSpeed;
+        if (inputMap["ArrowUp"]) camera.rotation.x -= rotationSpeed;
+        if (inputMap["ArrowDown"]) camera.rotation.x += rotationSpeed;
+
+        // Death / Reset
+        if (playerMesh.position.y < -10) {
+            playerMesh.position = new BABYLON.Vector3(-14, 13, 27);
+            playerAggregate.body.setLinearVelocity(BABYLON.Vector3.Zero());
+        }
+    });
+
+    // Start render loop
+    engine.runRenderLoop(() => scene.render());
+}
+
+// Run the main function
+main();
+
 window.addEventListener("resize", () => engine.resize());
