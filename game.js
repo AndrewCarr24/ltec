@@ -47,7 +47,7 @@ async function main() {
     const playerAggregate = new BABYLON.PhysicsAggregate(
         playerMesh,
         BABYLON.PhysicsShapeType.CAPSULE,
-        { mass: 70, friction: 0.5, restitution: 0 },
+        { mass: 70, friction: 0, restitution: 0 },
         scene
     );
 
@@ -72,7 +72,7 @@ async function main() {
                 new BABYLON.PhysicsAggregate(
                     mesh,
                     BABYLON.PhysicsShapeType.MESH,
-                    { mass: 0, friction: 0.5 }, // mass 0 = static
+                    { mass: 0, friction: 0 }, // mass 0 = static
                     scene
                 );
             }
